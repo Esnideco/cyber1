@@ -1,0 +1,35 @@
+FROM logs-azure.auditlogs*, logs-azure.signinlogs*
+| WHERE `azure.auditlogs.properties.initiated_by.user.id` IN ("REPLACE_WITH_BG1_OBJECT_ID", "REPLACE_WITH_BG2_OBJECT_ID")
+    OR `azure.auditlogs.properties.target_resources.0.id` IN ("REPLACE_WITH_BG1_OBJECT_ID", "REPLACE_WITH_BG2_OBJECT_ID")
+    OR `azure.auditlogs.properties.target_resources.1.id` IN ("REPLACE_WITH_BG1_OBJECT_ID", "REPLACE_WITH_BG2_OBJECT_ID")
+    OR `azure.signinlogs.properties.user_id` IN ("REPLACE_WITH_BG1_OBJECT_ID", "REPLACE_WITH_BG2_OBJECT_ID")
+| EVAL all_props = CONCAT(
+    COALESCE(`azure.auditlogs.properties.target_resources.0.modified_properties.0.new_value`, ""), " | ",
+    COALESCE(`azure.auditlogs.properties.target_resources.0.modified_properties.1.new_value`, ""), " | ",
+    COALESCE(`azure.auditlogs.properties.target_resources.0.modified_properties.2.new_value`, ""), " | ",
+    COALESCE(`azure.auditlogs.properties.target_resources.0.modified_properties.3.new_value`, ""), " | ",
+    COALESCE(`azure.auditlogs.properties.target_resources.0.modified_properties.4.new_value`, ""), " | ",
+    COALESCE(`azure.auditlogs.properties.target_resources.0.modified_properties.5.new_value`, ""), " | ",
+    COALESCE(`azure.auditlogs.properties.target_resources.0.modified_properties.6.new_value`, "")
+  )
+| EVAL event_type = CASE(
+    `azure.signinlogs.properties.user_id` IS NOT NULL, "SIGN-IN",
+    `azure.auditlogs.properties.initiated_by.user.id` IN ("REPLACE_WITH_BG1_OBJECT_ID", "REPLACE_WITH_BG2_OBJECT_ID"), "CHANGE (by break-glass acct)",
+    "CHANGE (to break-glass acct)"
+  )
+| EVAL context = CASE(
+    `azure.signinlogs.properties.user_id` IS NOT NULL, `azure.signinlogs.properties.ip_address`,
+    COALESCE(`azure.auditlogs.properties.initiated_by.user.userPrincipalName`, `azure.auditlogs.properties.initiated_by.app.displayName`, "system/unknown")
+  )
+| EVAL action_summary = CASE(
+    `azure.signinlogs.properties.user_id` IS NOT NULL, "Interactive/non-interactive sign-in",
+    `azure.auditlogs.operation_name` == "Update PasswordProfile", "Reset password",
+    `azure.auditlogs.operation_name` == "Disable account", "Disabled account",
+    `azure.auditlogs.operation_name` == "Delete user", "Deleted account",
+    `azure.auditlogs.operation_name` LIKE "Add member to group*", CONCAT("Added to group: ", COALESCE(`azure.auditlogs.properties.target_resources.1.display_name`, "see all_props")),
+    `azure.auditlogs.operation_name` LIKE "Add owner to group*", CONCAT("Added as owner of group: ", COALESCE(`azure.auditlogs.properties.target_resources.1.display_name`, "see all_props")),
+    `azure.auditlogs.operation_name` LIKE "Add member to role*", CONCAT("Granted role: ", COALESCE(`azure.auditlogs.properties.target_resources.1.display_name`, "see all_props")),
+    `azure.auditlogs.operation_name`
+  )
+| KEEP @timestamp, event_type, action_summary, context, azure.auditlogs.operation_name, all_props
+| SORT @timestamp DESC
